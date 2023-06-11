@@ -8,11 +8,13 @@ import re
 import wave
 import numpy as np
 import python_speech_features as ps
+import soundfile as sf
 from sklearn.preprocessing import StandardScaler
 import os
-import glob
+import torch
 import pickle
 import csv
+
 
 with open('MELD_features_raw.pkl', 'rb') as file:
     Pre_ALL_data = pickle.load(file)
@@ -20,6 +22,13 @@ with open('MELD_features_raw.pkl', 'rb') as file:
 Data_dir = '/home/shixiaohan-toda/Desktop/Experiment/MELD_Feature/'
 rootdir_1 = '/media/shixiaohan-toda/70e9f22b-13a4-429e-acad-a8786e1f1143/DataBase/MELD.Raw/'
 rootdir_2 = '/media/shixiaohan-toda/70e9f22b-13a4-429e-acad-a8786e1f1143/DataBase/MELD/'
+
+from transformers import Wav2Vec2Model
+from transformers import Wav2Vec2Processor
+processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
+model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h")    # 用于提取通用特征，768维
+model.eval()
+
 
 '''
 train_data: 9989
@@ -53,7 +62,6 @@ def Get_fea_new(dir, name):
         data['id'] = sess[:-4][:-10]
         data['fea_data'] = np.load(data_dir)
         num = num + 1
-        print(num)
         traindata.append(data)
     return traindata
 
@@ -90,7 +98,40 @@ def Get_fea_Spec(dir, name):
         one_mel_data['fea_data'] = mel_data
         train_mel_data.append(one_mel_data)
         train_num = train_num + 1
-        print(train_num)
+    return train_mel_data
+
+def Get_fea_Wav2vec(dir, name):
+    train_mel_data = []
+    data_dir_org = dir + name + '_wav'
+    train_num = 0
+    for sess in os.listdir(data_dir_org):
+        mel_data = []
+        one_mel_data = {}
+        data_dir = data_dir_org + '/' + sess
+        wavname = data_dir.split("/")[-1][:-4]
+        audio_input, sample_rate = sf.read(data_dir)
+        input_values = processor(audio_input, sampling_rate=sample_rate,
+                                 return_tensors="pt").input_values
+        with torch.no_grad():
+            # model inference
+            hidden_states = model(input_values, output_hidden_states=True).hidden_states # tuple of (B, T, D)
+            feature = torch.stack(hidden_states)[-1].sum(dim=0)  # sum, (B, T, D)
+            feature = feature[0].detach().squeeze().cpu().numpy() # (T, D)
+            mel_data.append(feature)
+            one_mel_data['id'] = wavname
+            mel_data = np.array(mel_data)
+            one_mel_data['wav2vec_data'] = mel_data
+            '''
+            wav2vec2 = model(input_values)['last_hidden_state']
+            wav2vec2 = wav2vec2.mean(1)
+            mel_data.append(wav2vec2.detach().numpy())
+            one_mel_data['id'] = wavname
+            mel_data = np.array(mel_data)
+            one_mel_data['wav2vec_data'] = mel_data
+            '''
+            train_mel_data.append(one_mel_data)
+            train_num = train_num + 1
+            print(train_num)
     return train_mel_data
 
 def Get_fea(dir, name):
@@ -124,6 +165,7 @@ def Get_fea(dir, name):
     return traindata
 
 def Divide_train_test_data_from_train(ALL_data,ALL_data_tar):
+    num = 0
     train_data = []
     for itm in ALL_data_tar:
         data_1 = []
@@ -138,11 +180,13 @@ def Divide_train_test_data_from_train(ALL_data,ALL_data_tar):
                 data['Utterance'] = ALL_data[5][itm][j]
                 data['Sentiment'] = ALL_data[8][itm][j]
                 data_1.append(data)
+                num = num + 1
             train_data.append(data_1)
-    print(len(train_data))
+    print(num)
     return train_data
 def Divide_train_test_data_from_dev(ALL_data,ALL_data_tar):
     train_data = []
+    num = 0
     for itm in ALL_data_tar:
         data_1 = []
         if(itm >= 1039):
@@ -157,11 +201,13 @@ def Divide_train_test_data_from_dev(ALL_data,ALL_data_tar):
                 data['Utterance'] = ALL_data[5][itm][j]
                 data['Sentiment'] = ALL_data[8][itm][j]
                 data_1.append(data)
+                num = num + 1
             train_data.append(data_1)
-    print(len(train_data))
+    print(num)
     return train_data
 def Divide_train_test_data_from_test(ALL_data,ALL_data_tar):
     train_data = []
+    num = 0
     for itm in ALL_data_tar:
         data_1 = []
         if(itm >= 1153):
@@ -176,8 +222,9 @@ def Divide_train_test_data_from_test(ALL_data,ALL_data_tar):
                 data['Utterance'] = ALL_data[5][itm][j]
                 data['Sentiment'] = ALL_data[8][itm][j]
                 data_1.append(data)
+                num = num + 1
             train_data.append(data_1)
-    print(len(train_data))
+    print(num)
     return train_data
 
 def Get_label(name):
@@ -208,7 +255,7 @@ def Get_label(name):
         train_label.append(s_data)
     return train_label, max_dia_num
 
-def combine_wav_text(Pre_data,wav_pre_data,wav_pre_data_1,wav_pre_data_2,label_data):
+def combine_wav_text(Pre_data,wav_pre_data,wav_pre_data_1, wav_pre_data_11,wav_pre_data_2,label_data):
     for i in range(len(Pre_data)):
         for j in range(len(Pre_data[i])):
             for x in range(len(wav_pre_data)):
@@ -219,6 +266,12 @@ def combine_wav_text(Pre_data,wav_pre_data,wav_pre_data_1,wav_pre_data_2,label_d
             for x in range(len(wav_pre_data_1)):
                 if (Pre_data[i][j]['IDs'] == wav_pre_data_1[x]['id']):
                     Pre_data[i][j]['Mel_wav_data'] = wav_pre_data_1[x]['fea_data']
+    for i in range(len(Pre_data)):
+        for j in range(len(Pre_data[i])):
+            for x in range(len(wav_pre_data_11)):
+                if (Pre_data[i][j]['IDs'] == wav_pre_data_11[x]['id']):
+                    Pre_data[i][j]['Wav2vec_wav_data'] = wav_pre_data_11[x]['wav2vec_data']
+
     for i in range(len(Pre_data)):
         for j in range(len(Pre_data[i])):
             for x in range(len(wav_pre_data_2)):
@@ -234,7 +287,7 @@ def combine_wav_text(Pre_data,wav_pre_data,wav_pre_data_1,wav_pre_data_2,label_d
     ALL_data = []
     for i in range(len(Pre_data)):
         for j in range(len(Pre_data[i])):
-            if(len(Pre_data[i][j]) == 13):
+            if(len(Pre_data[i][j]) == 14):
                 ALL_data.append(Pre_data[i][j])
     return ALL_data
 
@@ -299,13 +352,9 @@ def Class_data(all_data, max_dia_num):
     return CAN_USE
 
 
-train_pre_data_text = Get_fea_text(rootdir_2, 'train')
-dev_pre_data_text = Get_fea_text(rootdir_2, 'dev')
-test_pre_data_text = Get_fea_text(rootdir_2, 'test')
-print(len(train_pre_data_text)+len(dev_pre_data_text)+len(test_pre_data_text))
-print('**********************************')
 
-#语音特征 1*88
+
+#语音MEL特征 time*120
 train_pre_data_mel = Get_fea_Spec(rootdir_1, 'train')
 dev_pre_data_mel = Get_fea_Spec(rootdir_1, 'dev')
 test_pre_data_mel = Get_fea_Spec(rootdir_1, 'test')
@@ -313,17 +362,24 @@ print(len(train_pre_data_mel)+len(dev_pre_data_mel)+len(test_pre_data_mel))
 print('**********************************')
 
 
-#语音特征 time * 144
+#语音ASR特征 time * 144
 train_pre_data = Get_fea_new(rootdir_2, 'train')
 dev_pre_data = Get_fea_new(rootdir_2, 'dev')
 test_pre_data = Get_fea_new(rootdir_2, 'test')
 print(len(train_pre_data)+len(dev_pre_data)+len(test_pre_data))
 print('**********************************')
 
+#语音WAV2VEC特征 time * 768
+train_pre_data_wav2vec = Get_fea_Wav2vec(rootdir_1, 'train')
+dev_pre_data_wav2vec = Get_fea_Wav2vec(rootdir_1, 'dev')
+test_pre_data_wav2vec = Get_fea_Wav2vec(rootdir_1, 'test')
+print(len(train_pre_data_wav2vec)+len(dev_pre_data_wav2vec)+len(test_pre_data_wav2vec))
+print('**********************************')
 
 Pre_train_data = Divide_train_test_data_from_train(Pre_ALL_data,Pre_ALL_data[6])
 Pre_dev_data = Divide_train_test_data_from_dev(Pre_ALL_data,Pre_ALL_data[6])
 Pre_test_data = Divide_train_test_data_from_test(Pre_ALL_data,Pre_ALL_data[7])
+
 
 #提取文本内容+句级别标签
 train_label, max_dia_num_train = Get_label('train')
@@ -332,9 +388,15 @@ test_label, max_dia_num_test = Get_label('test')
 print(len(train_label)+len(dev_label)+len(test_label))
 print('**********************************')
 
-train_data = combine_wav_text(Pre_train_data, train_pre_data, train_pre_data_mel, train_pre_data_text, train_label)
-dev_data = combine_wav_text(Pre_dev_data, dev_pre_data, dev_pre_data_mel, dev_pre_data_text, dev_label,)
-test_data = combine_wav_text(Pre_test_data, test_pre_data, test_pre_data_mel, test_pre_data_text, test_label)
+train_pre_data_text = Get_fea_text(rootdir_2, 'train')
+dev_pre_data_text = Get_fea_text(rootdir_2, 'dev')
+test_pre_data_text = Get_fea_text(rootdir_2, 'test')
+print(len(train_pre_data_text)+len(dev_pre_data_text)+len(test_pre_data_text))
+print('**********************************')
+
+train_data = combine_wav_text(Pre_train_data, train_pre_data, train_pre_data_mel, train_pre_data_wav2vec, train_pre_data_text, train_label)
+dev_data = combine_wav_text(Pre_dev_data, dev_pre_data, dev_pre_data_mel, dev_pre_data_wav2vec, dev_pre_data_text, dev_label,)
+test_data = combine_wav_text(Pre_test_data, test_pre_data, test_pre_data_mel, test_pre_data_wav2vec, test_pre_data_text, test_label)
 
 print(len(train_data))
 print(len(dev_data))
@@ -355,3 +417,77 @@ file.close()
 file = open('test_data_map_for-Mulit-speaker.pickle', 'wb')
 pickle.dump(Re_Define_Group(test_data), file)
 file.close()
+
+
+
+'''
+def is_UTF_8(str):
+    remain = 0         #剩余byte数
+    for x in range(len(str)):
+        if remain == 0:
+            if (ord(str[x]) & 0x80) == 0x00:
+                remain = 0
+            elif (ord(str[x]) & 0xE0) == 0xC0:
+                remain = 1
+            elif (ord(str[x]) & 0xF0) == 0xE0:
+                remain = 2
+            elif(ord(str[x]) & 0xF8) == 0xF0:
+                remain = 3
+            else:
+                return False
+        else:
+            if not ((ord(str[x]) & 0xC0) == 0x80):
+                return False
+            remain = remain - 1
+    if remain == 0:
+        return True
+    else:
+        return False
+'''
+
+'''
+f = open("a.txt", 'w')
+for i in range(len(Pre_train_data)):
+    for j in range(len(Pre_train_data[i])):
+        f.write(Pre_train_data[i][j]['IDs'] + '.wav')
+        f.write('\t')
+        x= []
+        for w in range(len(Pre_train_data[i][j]['Utterance'])):
+            if(is_UTF_8(Pre_train_data[i][j]['Utterance'][w])):
+                x.extend(Pre_train_data[i][j]['Utterance'][w])
+            else:
+                x.extend("'")
+        f.write(''.join(x))
+        f.write('\n')
+f.close()
+
+f = open("b.txt", 'w')
+for i in range(len(Pre_dev_data)):
+    for j in range(len(Pre_dev_data[i])):
+        f.write(str(Pre_dev_data[i][j]['IDs']) + '.wav')
+        f.write('\t')
+        x= []
+        for w in range(len(Pre_dev_data[i][j]['Utterance'])):
+            if(is_UTF_8(Pre_dev_data[i][j]['Utterance'][w])):
+                x.extend(Pre_dev_data[i][j]['Utterance'][w])
+            else:
+                x.extend("'")
+        f.write(''.join(x))
+        f.write('\n')
+f.close()
+
+f = open("c.txt", 'w')
+for i in range(len(Pre_test_data)):
+    for j in range(len(Pre_test_data[i])):
+        f.write(str(Pre_test_data[i][j]['IDs']) + '.wav')
+        f.write('\t')
+        x= []
+        for w in range(len(Pre_test_data[i][j]['Utterance'])):
+            if(is_UTF_8(Pre_test_data[i][j]['Utterance'][w])):
+                x.extend(Pre_test_data[i][j]['Utterance'][w])
+            else:
+                x.extend("'")
+        f.write(''.join(x))
+        f.write('\n')
+f.close()
+'''
